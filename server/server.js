@@ -1,3 +1,5 @@
+
+
 import express from "express";
 import helmet from "helmet";
 import cors from "cors";
@@ -5,6 +7,22 @@ import sqlite3 from "sqlite3";
 import { open } from "sqlite";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// 기본 DB 디렉토리는 /tmp/rank (Railway), 로컬은 프로젝트/data
+const DB_DIR =
+  process.env.DB_DIR ||
+  (process.env.RAILWAY_ENVIRONMENT ? "/tmp/rank" : path.join(__dirname, "data"));
+
+fs.mkdirSync(DB_DIR, { recursive: true }); // 상위 폴더 없으면 생성
+
+console.log("[DB] Using:", DB_FILE); // 실제 경로 확인용 로그
 
 const app = express();
 app.use(express.json({ limit: "32kb" }));
