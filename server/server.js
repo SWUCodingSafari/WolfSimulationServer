@@ -17,9 +17,7 @@ const __dirname = path.dirname(__filename);
 // ---- env & path ----
 // Railway는 /tmp 가 쓰기 가능한 유일한 디렉토리라고 가정합니다.
 // 로컬에서는 프로젝트 폴더 내 /data 를 기본으로 사용합니다.
-const DB_DIR =
-  process.env.DB_DIR ||
-  (process.env.RAILWAY_ENVIRONMENT ? "/tmp/rank" : path.join(__dirname, "data"));
+const DB_DIR = process.env.DB_DIR || "/tmp/rank";
 
 // 상위 폴더 없으면 생성 (없으면 SQLITE_CANTOPEN 발생할 수 있음)
 fs.mkdirSync(DB_DIR, { recursive: true });
@@ -27,8 +25,15 @@ fs.mkdirSync(DB_DIR, { recursive: true });
 // DB_FILE은 env가 있으면 그대로 사용, 없으면 DB_DIR/rank.db 사용
 const DB_FILE = process.env.DB_FILE || path.join(DB_DIR, "rank.db");
 
-// 실제 사용하는 DB 경로 로그
-console.log("[DB] Using:", DB_FILE);
+// 실제 사용하는 경로/환경 로그
+console.log("[ENV] cwd:", process.cwd());
+console.log("[ENV] __dirname:", __dirname);
+console.log("[ENV] RAILWAY vars:", {
+  RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT,
+  RAILWAY_STATIC_URL: process.env.RAILWAY_STATIC_URL,
+});
+console.log("[DB] dir:", DB_DIR);
+console.log("[DB] file:", DB_FILE);
 
 // ---- other env ----
 const PORT = process.env.PORT || 3000;
@@ -42,7 +47,25 @@ app.use(helmet());
 app.use(cors({ origin: true }));
 
 // ---- db open & schema ----
-const db = await open({ filename: DB_FILE, driver: sqlite3.Database });
+// 먼저 파일을 미리 'touch'해서 상위 디렉토리/권한 문제를 조기 노출
+try {
+  fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
+  const fd = fs.openSync(DB_FILE, "a");
+  fs.closeSync(fd);
+  console.log("[DB] touched file ok");
+} catch (e) {
+  console.error("[DB] touch failed:", e);
+}
+
+let db;
+try {
+  db = await open({ filename: DB_FILE, driver: sqlite3.Database });
+  console.log("[DB] opened file DB ok");
+} catch (e) {
+  console.error("[DB] file open failed, falling back to memory:", e);
+  db = await open({ filename: "file:rank?mode=memory&cache=shared", driver: sqlite3.Database });
+  console.warn("[DB] using in-memory DB (data will not persist)");
+}
 await db.exec("PRAGMA foreign_keys = ON;");
 await db.exec(`
 CREATE TABLE IF NOT EXISTS users (
