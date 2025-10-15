@@ -13,7 +13,7 @@ app.use(cors({ origin: true }));
 
 // ===== env =====
 const PORT = process.env.PORT || 3000;
-const DB_FILE = process.env.DB_FILE || "./rank.db";
+const DB_FILE = process.env.DB_FILE || "/tmp/rank.db";
 const JWT_SECRET = process.env.JWT_SECRET || "CHANGE_ME_JWT_SECRET";
 const JWT_EXPIRES = process.env.JWT_EXPIRES || "1d";
 
