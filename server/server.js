@@ -1,5 +1,4 @@
-
-
+// ---- imports ----
 import express from "express";
 import helmet from "helmet";
 import cors from "cors";
@@ -7,35 +6,42 @@ import sqlite3 from "sqlite3";
 import { open } from "sqlite";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
+// ---- path helpers ----
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 기본 DB 디렉토리는 /tmp/rank (Railway), 로컬은 프로젝트/data
+// ---- env & path ----
+// Railway는 /tmp 가 쓰기 가능한 유일한 디렉토리라고 가정합니다.
+// 로컬에서는 프로젝트 폴더 내 /data 를 기본으로 사용합니다.
 const DB_DIR =
   process.env.DB_DIR ||
   (process.env.RAILWAY_ENVIRONMENT ? "/tmp/rank" : path.join(__dirname, "data"));
 
-fs.mkdirSync(DB_DIR, { recursive: true }); // 상위 폴더 없으면 생성
+// 상위 폴더 없으면 생성 (없으면 SQLITE_CANTOPEN 발생할 수 있음)
+fs.mkdirSync(DB_DIR, { recursive: true });
 
-console.log("[DB] Using:", DB_FILE); // 실제 경로 확인용 로그
+// DB_FILE은 env가 있으면 그대로 사용, 없으면 DB_DIR/rank.db 사용
+const DB_FILE = process.env.DB_FILE || path.join(DB_DIR, "rank.db");
 
+// 실제 사용하는 DB 경로 로그
+console.log("[DB] Using:", DB_FILE);
+
+// ---- other env ----
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || "CHANGE_ME_JWT_SECRET";
+const JWT_EXPIRES = process.env.JWT_EXPIRES || "1d";
+
+// ---- app ----
 const app = express();
 app.use(express.json({ limit: "32kb" }));
 app.use(helmet());
 app.use(cors({ origin: true }));
 
-// ===== env =====
-const PORT = process.env.PORT || 3000;
-const DB_FILE = process.env.DB_FILE || "/tmp/rank.db";
-const JWT_SECRET = process.env.JWT_SECRET || "CHANGE_ME_JWT_SECRET";
-const JWT_EXPIRES = process.env.JWT_EXPIRES || "1d";
-
-// ===== db & schema =====
+// ---- db open & schema ----
 const db = await open({ filename: DB_FILE, driver: sqlite3.Database });
 await db.exec("PRAGMA foreign_keys = ON;");
 await db.exec(`
@@ -57,6 +63,7 @@ CREATE TABLE IF NOT EXISTS leaderboard (
 CREATE INDEX IF NOT EXISTS idx_map_score ON leaderboard(map, best_score DESC);
 `);
 
+// ---- helpers ----
 const MAPS = new Set(["plain", "rain", "snow"]);
 const isValidMap = (m) => typeof m === "string" && MAPS.has(m);
 
@@ -65,8 +72,12 @@ const auth = (req, res, next) => {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
   if (!token) return res.status(401).json({ err: "no token" });
-  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
-  catch { return res.status(401).json({ err: "invalid token" }); }
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ err: "invalid token" });
+  }
 };
 
 function isValidStats(obj) {
@@ -81,10 +92,11 @@ function isValidStats(obj) {
   return true;
 }
 
-// ===== health =====
+// ---- health & debug ----
 app.get("/health", (_, res) => res.json({ ok: true }));
+app.get("/debug/dbpath", (_, res) => res.json({ db_file: DB_FILE, db_dir: DB_DIR }));
 
-// ===== auth =====
+// ---- auth ----
 app.post("/auth/register", async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ err: "username/password required" });
@@ -102,7 +114,8 @@ app.post("/auth/register", async (req, res) => {
     res.json({ token, uid, username });
   } catch (e) {
     if (String(e).includes("UNIQUE")) return res.status(409).json({ err: "username taken" });
-    console.error(e); res.status(500).json({ err: "server error" });
+    console.error(e);
+    res.status(500).json({ err: "server error" });
   }
 });
 
@@ -117,13 +130,13 @@ app.post("/auth/login", async (req, res) => {
   res.json({ token, uid: row.id, username });
 });
 
-app.post("/auth/logout", (_, res) => res.json({ ok: true })); // 최소 구현
+app.post("/auth/logout", (_, res) => res.json({ ok: true }));
 app.get("/me", auth, async (req, res) => {
   const me = await db.get(`SELECT id, username, created_at FROM users WHERE id = ?`, req.user.uid);
   res.json({ user: me });
 });
 
-// ===== submit (계정당 맵별 1개 최고기록 + 스탯) =====
+// ---- submit (계정당 맵별 1개 최고기록 + 스탯) ----
 app.post("/submit", auth, async (req, res) => {
   const { map, score, stats } = req.body || {};
   if (!isValidMap(map)) return res.status(400).json({ err: "bad map" });
@@ -160,7 +173,7 @@ app.post("/submit", auth, async (req, res) => {
   res.json({ ok: true, updated: false }); // 낮은 점수는 무시
 });
 
-// ===== 내 최고기록(Top10에 없어도 항상 조회 가능) =====
+// ---- 내 최고기록 (Top10 미포함이어도 조회 가능) ----
 app.get("/me/best", auth, async (req, res) => {
   const map = req.query.map;
   if (!isValidMap(map)) return res.status(400).json({ err: "bad map" });
@@ -178,12 +191,12 @@ app.get("/me/best", auth, async (req, res) => {
       map,
       score: row.best_score,
       stats: JSON.parse(row.best_stats || "{}"),
-      updated_at: row.updated_at
-    }
+      updated_at: row.updated_at,
+    },
   });
 });
 
-// ===== 맵별 TopN =====
+// ---- 맵별 TopN ----
 app.get("/top", async (req, res) => {
   const map = req.query.map;
   if (!isValidMap(map)) return res.status(400).json({ err: "bad map" });
@@ -201,7 +214,7 @@ app.get("/top", async (req, res) => {
   res.json(rows);
 });
 
-// ===== (선택) 맵별 내 순위 =====
+// ---- (선택) 맵별 내 순위 ----
 app.get("/myrank", auth, async (req, res) => {
   const map = req.query.map;
   if (!isValidMap(map)) return res.status(400).json({ err: "bad map" });
@@ -219,4 +232,13 @@ app.get("/myrank", auth, async (req, res) => {
   res.json({ map, rank: higher.c + 1, score: me.best_score });
 });
 
+// ---- error surfaces ----
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
+});
+
+// ---- listen ----
 app.listen(PORT, () => console.log(`rank api listening on :${PORT}`));
